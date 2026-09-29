@@ -11,6 +11,7 @@ const Atp = () => import('@/views/atp/index.vue')
 const Balise = () => import('@/views/balise/index.vue')
 const Axlecounter = () => import('@/views/axlecounter/index.vue')
 const Dispatchcenter = () => import('@/views/dispatchcenter/index.vue')
+const DispatchcenterDetail = () => import('@/views/dispatchcenter/detail.vue')
 const Maintenancewindow = () => import('@/views/maintenancewindow/index.vue')
 const Relay = () => import('@/views/relay/index.vue')
 const Fuse = () => import('@/views/fuse/index.vue')
@@ -36,6 +37,7 @@ const router = createRouter({
     { path: '/balise', name: 'balise', component: Balise },
     { path: '/axlecounter', name: 'axlecounter', component: Axlecounter },
     { path: '/dispatchcenter', name: 'dispatchcenter', component: Dispatchcenter },
+    { path: '/dispatchcenter/:id', name: 'dispatchcenter-detail', component: DispatchcenterDetail },
     { path: '/maintenancewindow', name: 'maintenancewindow', component: Maintenancewindow },
     { path: '/relay', name: 'relay', component: Relay },
     { path: '/fuse', name: 'fuse', component: Fuse },

@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <h2>调度中心管理</h2>
-        <p class="page-desc">维护调度台，围绕调度台编号、管辖范围、显示设备、操作终端做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护调度台，通道状态按 正常 → 通道降级 → 设备故障 → 备用运行 → 正常 逐级流转，每次切换留痕。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记调度台</button>
@@ -19,9 +19,20 @@
     </div>
 
     <form class="filter-bar" @submit.prevent="reload">
-      <label v-for="field in filterFields" :key="field" class="filter-item">
-        <span>{{ field }}</span>
-        <input v-model="filters[field]" :placeholder="`按${field}检索`" />
+      <label class="filter-item">
+        <span>调度台编号</span>
+        <input v-model="filters.keyword" placeholder="按调度台编号检索" />
+      </label>
+      <label class="filter-item">
+        <span>通道状态</span>
+        <select v-model="filters.status">
+          <option value="">全部状态</option>
+          <option v-for="status in statuses" :key="status" :value="status">{{ status }}</option>
+        </select>
+      </label>
+      <label class="filter-item">
+        <span>操作人</span>
+        <input v-model="operator" placeholder="执行切换的值班人员" />
       </label>
       <button class="btn" type="submit">查询</button>
       <button class="btn ghost" type="button" @click="resetFilters">重置条件</button>
@@ -36,17 +47,28 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            <RouterLink v-if="column === '调度台编号'" :to="`/dispatchcenter/${row.id}`">
+              {{ row[column] || '—' }}
+            </RouterLink>
+            <template v-else>{{ row[column] || '—' }}</template>
+          </td>
           <td class="row-actions">
-            <button
-              v-for="action in actions"
-              :key="action"
-              class="link"
-              type="button"
-              @click="runAction(action, row)"
-            >
-              {{ action }}
-            </button>
+            <template v-if="row['调度台状态'] === '已停用'">
+              <span class="muted-text">已停用</span>
+            </template>
+            <template v-else>
+              <button
+                v-for="action in availableActions(row)"
+                :key="action"
+                class="link"
+                type="button"
+                @click="runAction(action, row)"
+              >
+                {{ action }}
+              </button>
+            </template>
+            <RouterLink class="link" :to="`/dispatchcenter/${row.id}`">明细</RouterLink>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -57,32 +79,54 @@
 
     <footer class="page-foot">
       <span>共 {{ total }} 条调度中心记录</span>
+      <span v-if="infoMessage" class="info-text">{{ infoMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/dispatchcenter'
-const columns = ["调度台编号", "管辖范围", "显示设备", "操作终端", "通信链路", "通道状态", "备用方式", "调度台状态"]
-const actions = ["登记降级", "切换备用", "处理故障"]
+const columns = ["调度台编号", "管辖范围", "优先级", "显示设备", "操作终端", "通信链路", "通道状态", "备用方式", "调度台状态", "最近操作人", "最近切换时间"]
 const statuses = ["正常", "通道降级", "设备故障", "备用运行"]
-const stats = [{"label": "正常调度台", "value": 0}, {"label": "降级调度台", "value": 0}, {"label": "故障调度台", "value": 0}]
+// 每个状态只暴露下一步动作，与后端状态机保持一致，避免越级操作。
+const NEXT_ACTIONS: Record<string, string[]> = {
+  正常: ["登记降级"],
+  通道降级: ["登记故障"],
+  设备故障: ["切换备用"],
+  备用运行: ["处理故障"],
+}
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
-const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const infoMessage = ref('')
+const operator = ref('')
+const filters = ref<Record<string, string>>({ keyword: '', status: '' })
+
+const stats = computed(() => [
+  { label: '正常调度台', value: countByStatus('正常') },
+  { label: '降级调度台', value: countByStatus('通道降级') },
+  { label: '故障调度台', value: countByStatus('设备故障') },
+  { label: '备用运行', value: countByStatus('备用运行') },
+])
+
+function countByStatus(status: string) {
+  return rows.value.filter((row) => row['通道状态'] === status).length
+}
+
+function availableActions(row: Row) {
+  return NEXT_ACTIONS[String(row['通道状态'] ?? '')] ?? []
+}
 
 function resetFilters() {
-  filters.value = {}
+  filters.value = { keyword: '', status: '' }
   void reload()
 }
 
@@ -96,14 +140,17 @@ function openCreate() {
 
 async function runAction(action: string, row: Row) {
   errorMessage.value = ''
+  infoMessage.value = ''
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, operator: operator.value }),
     })
-    if (!response.ok) {
-      throw new Error('调度中心动作未生效，请稍后重试')
+    const payload = await response.json()
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message || payload.detail || '调度中心动作未生效')
     }
+    infoMessage.value = payload.message
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '调度中心操作失败'
@@ -112,9 +159,11 @@ async function runAction(action: string, row: Row) {
 
 async function reload() {
   errorMessage.value = ''
-  const query = new URLSearchParams(filters.value as Record<string, string>).toString()
+  const query = new URLSearchParams()
+  if (filters.value.keyword) query.set('keyword', filters.value.keyword)
+  if (filters.value.status) query.set('status', filters.value.status)
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
+    const response = await request(`${ENDPOINT}?${query.toString()}`)
     if (!response.ok) {
       throw new Error('调度台列表读取失败')
     }
@@ -128,3 +177,18 @@ async function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.muted-text {
+  color: var(--muted);
+  font-size: 12px;
+}
+.info-text {
+  color: #067647;
+}
+select {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+</style>

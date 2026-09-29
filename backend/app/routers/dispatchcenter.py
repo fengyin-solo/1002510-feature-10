@@ -1,4 +1,4 @@
-"""调度中心接口：维护调度台，覆盖登记降级、切换备用、处理故障等动作。"""
+"""调度中心接口：维护调度台，覆盖登记降级、登记故障、切换备用、处理故障等动作。"""
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/dispatchcenter", tags=["调度中心"])
 
 service = DispatchcenterService()
 
-LIST_FIELDS = ["调度台编号", "管辖范围", "显示设备", "操作终端", "通信链路", "通道状态", "备用方式", "调度台状态"]
+LIST_FIELDS = ["调度台编号", "管辖范围", "优先级", "显示设备", "操作终端", "通信链路", "通道状态", "备用方式", "调度台状态"]
 STATUSES = ["正常", "通道降级", "设备故障", "备用运行"]
 
 
@@ -32,7 +32,7 @@ def list_entries(
 
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
-    """读取单条调度台明细；不存在时给出可读的错误说明。"""
+    """读取单条调度台明细，含完整切换记录；不存在时给出可读的错误说明。"""
     entry = service.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"调度台 {entry_id} 不存在或已归档")
@@ -50,9 +50,14 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条调度台执行登记降级、切换备用、处理故障；不允许的动作会被拦下并说明原因。"""
+    """对单条调度台执行登记降级、登记故障、切换备用、处理故障。
+
+    越级流转、停用调度台、操作终端或备用方式缺失、管辖范围内存在更高优先级
+    故障链路等情况都会被拦下并说明原因；成功流转会留下切换记录。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    operator = str(payload.values.get("operator") or "").strip()
+    entry, message = service.run_action(entry_id, action, operator or None)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
